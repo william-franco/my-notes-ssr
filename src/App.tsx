@@ -1,8 +1,13 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Search, Plus, Edit2, Trash2, Check, X, Moon, Sun, Filter } from 'lucide-react';
 
-// ==================== MODEL ====================
+// ==================== UTILS ====================
+/**
+ * Check if code is running on client-side
+ */
+const isClient = typeof window !== 'undefined';
 
+// ==================== MODEL ====================
 /**
  * Note Model - Represents a single note entity
  */
@@ -75,7 +80,6 @@ class Note {
 }
 
 // ==================== TYPES ====================
-
 interface NoteData {
   id: string;
   title: string;
@@ -92,9 +96,8 @@ interface FormData {
 }
 
 // ==================== SERVICE ====================
-
 /**
- * StorageService - Handles all sessionStorage operations
+ * StorageService - Handles all sessionStorage operations with SSR support
  */
 class StorageService {
   private static readonly STORAGE_KEYS = Object.freeze({
@@ -103,9 +106,11 @@ class StorageService {
   });
 
   /**
-   * Save data to sessionStorage
+   * Save data to sessionStorage (client-side only)
    */
   static saveToStorage(key: string, value: any): void {
+    if (!isClient) return;
+
     try {
       sessionStorage.setItem(key, JSON.stringify(value));
     } catch (error) {
@@ -114,9 +119,11 @@ class StorageService {
   }
 
   /**
-   * Load data from sessionStorage with default fallback
+   * Load data from sessionStorage with default fallback (client-side only)
    */
   static loadFromStorage<T>(key: string, defaultValue: T): T {
+    if (!isClient) return defaultValue;
+
     try {
       const saved = sessionStorage.getItem(key);
       return saved ? JSON.parse(saved) : defaultValue;
@@ -127,9 +134,11 @@ class StorageService {
   }
 
   /**
-   * Clear all app data from storage
+   * Clear all app data from storage (client-side only)
    */
   static clearStorage(): void {
+    if (!isClient) return;
+
     try {
       sessionStorage.removeItem(this.STORAGE_KEYS.DARK_MODE);
       sessionStorage.removeItem(this.STORAGE_KEYS.NOTES);
@@ -147,7 +156,6 @@ class StorageService {
 }
 
 // ==================== CONTROLLER ====================
-
 /**
  * NotesController - Handles business logic and data management
  */
@@ -156,7 +164,7 @@ class NotesController {
    * Generate unique ID for new notes
    */
   static generateId(): string {
-    return Date.now().toString(36) + Math.random().toString(36).substr(2);
+    return Date.now().toString(36) + Math.random().toString(36).substring(2);
   }
 
   /**
@@ -254,37 +262,34 @@ class NotesController {
 }
 
 // ==================== VIEW ====================
-
 /**
- * App Component - Main view
+ * NotesApp Component - Main view with SSR support
  */
-export default function App() {
-  // State management
+export default function NotesApp() {
+  // State management with SSR-safe initialization
   const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
   const [notes, setNotes] = useState<Note[]>([]);
-
-  const [isHydrated, setIsHydrated] = useState(false);
-
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [editingNote, setEditingNote] = useState<Note | null>(null);
   const [formData, setFormData] = useState<FormData>({ title: '', description: '' });
+  const [isHydrated, setIsHydrated] = useState<boolean>(false);
 
-  // Load from sessionStorage (client only)
+  // Hydration effect - load data only on client-side
   React.useEffect(() => {
     setIsDarkMode(NotesController.loadDarkMode());
     setNotes(NotesController.loadNotes());
     setIsHydrated(true);
   }, []);
 
-  // Sync dark mode to sessionStorage
+  // Sync dark mode to sessionStorage (client-side only)
   React.useEffect(() => {
     if (!isHydrated) return;
     NotesController.saveDarkMode(isDarkMode);
   }, [isDarkMode, isHydrated]);
 
-  // Sync notes to sessionStorage
+  // Sync notes to sessionStorage (client-side only)
   React.useEffect(() => {
     if (!isHydrated) return;
     NotesController.saveNotes(notes);
@@ -312,6 +317,7 @@ export default function App() {
       const newNote = NotesController.createNote(formData.title, formData.description);
       setNotes([newNote, ...notes]);
     }
+
     closeModal();
   };
 
@@ -344,9 +350,10 @@ export default function App() {
   };
 
   const handleClearData = (): void => {
+    if (!isClient) return;
+
     if (window.confirm('Tem certeza que deseja limpar todos os dados? Esta ação não pode ser desfeita.')) {
       NotesController.clearAllData();
-      // setIsDarkMode(false);
       setNotes([]);
       setSearchTerm('');
       setFilterStatus('all');
@@ -362,14 +369,17 @@ export default function App() {
           padding: 0;
           box-sizing: border-box;
         }
+
         .notes-app {
           min-height: 100vh;
           background-color: #f0f4ff;
           transition: all 0.3s ease;
         }
+
         .notes-app.dark {
           background-color: #111827;
         }
+
         /* Header Styles */
         .header {
           background-color: rgba(255, 255, 255, 0.95);
@@ -380,10 +390,12 @@ export default function App() {
           z-index: 40;
           backdrop-filter: blur(12px);
         }
+
         .dark .header {
           background-color: rgba(31, 41, 55, 0.95);
           border-bottom-color: #374151;
         }
+
         .header-container {
           max-width: 1152px;
           margin: 0 auto;
@@ -391,11 +403,13 @@ export default function App() {
           align-items: center;
           justify-content: space-between;
         }
+
         .header-logo {
           display: flex;
           align-items: center;
           gap: 12px;
         }
+
         .logo-icon {
           width: 40px;
           height: 40px;
@@ -406,6 +420,7 @@ export default function App() {
           justify-content: center;
           box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }
+
         .logo-text {
           font-size: 24px;
           font-weight: bold;
@@ -414,11 +429,13 @@ export default function App() {
           -webkit-text-fill-color: transparent;
           background-clip: text;
         }
+
         .header-actions {
           display: flex;
           align-items: center;
           gap: 12px;
         }
+
         /* Button Styles */
         .btn {
           border: none;
@@ -429,20 +446,25 @@ export default function App() {
           align-items: center;
           gap: 8px;
         }
+
         .btn-theme {
           padding: 10px;
           border-radius: 12px;
           background-color: #f3f4f6;
         }
+
         .dark .btn-theme {
           background-color: #374151;
         }
+
         .btn-theme:hover {
           background-color: #e5e7eb;
         }
+
         .dark .btn-theme:hover {
           background-color: #4b5563;
         }
+
         .btn-clear {
           padding: 10px 16px;
           border-radius: 12px;
@@ -451,16 +473,20 @@ export default function App() {
           border: 1px solid #ef4444;
           font-size: 14px;
         }
+
         .dark .btn-clear {
           color: #f87171;
           border-color: #f87171;
         }
+
         .btn-clear:hover {
           background-color: #fee2e2;
         }
+
         .dark .btn-clear:hover {
           background-color: rgba(239, 68, 68, 0.1);
         }
+
         .btn-primary {
           background: linear-gradient(to right, #4f46e5, #7c3aed);
           color: white;
@@ -468,16 +494,19 @@ export default function App() {
           border-radius: 12px;
           box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         }
+
         .btn-primary:hover {
           background: linear-gradient(to right, #4338ca, #6d28d9);
           box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
         }
+
         /* Main Content */
         .main-content {
           max-width: 1152px;
           margin: 0 auto;
           padding: 32px 16px;
         }
+
         /* Search and Filter Bar */
         .search-filter-bar {
           margin-bottom: 32px;
@@ -485,10 +514,12 @@ export default function App() {
           flex-direction: column;
           gap: 16px;
         }
+
         .search-container {
           position: relative;
           flex: 1;
         }
+
         .search-icon {
           position: absolute;
           left: 16px;
@@ -496,6 +527,7 @@ export default function App() {
           transform: translateY(-50%);
           color: #9ca3af;
         }
+
         .search-input {
           width: 100%;
           padding: 12px 16px 12px 48px;
@@ -507,20 +539,24 @@ export default function App() {
           transition: all 0.2s ease;
           font-size: 16px;
         }
+
         .dark .search-input {
           border-color: #374151;
           background-color: #1f2937;
           color: #f3f4f6;
         }
+
         .search-input:focus {
           border-color: #4f46e5;
           box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
         }
+
         .filter-buttons {
           display: flex;
           gap: 8px;
           flex-wrap: wrap;
         }
+
         .filter-btn {
           padding: 12px 16px;
           border-radius: 12px;
@@ -531,24 +567,29 @@ export default function App() {
           font-weight: 600;
           transition: all 0.2s ease;
         }
+
         .dark .filter-btn {
           border-color: #374151;
           background-color: #1f2937;
           color: #d1d5db;
         }
+
         .filter-btn.active {
           background-color: #4f46e5;
           color: white;
           border-color: #4f46e5;
         }
+
         .filter-btn:hover:not(.active) {
           border-color: #4f46e5;
         }
+
         /* Empty State */
         .empty-state {
           text-align: center;
           padding: 80px 0;
         }
+
         .empty-icon {
           width: 80px;
           height: 80px;
@@ -559,22 +600,27 @@ export default function App() {
           justify-content: center;
           margin: 0 auto 16px;
         }
+
         .dark .empty-icon {
           background-color: #1f2937;
         }
+
         .empty-text {
           color: #6b7280;
           font-size: 18px;
         }
+
         .dark .empty-text {
           color: #9ca3af;
         }
+
         /* Notes Grid */
         .notes-grid {
           display: grid;
           grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
           gap: 20px;
         }
+
         /* Note Card */
         .note-card {
           background-color: white;
@@ -585,23 +631,29 @@ export default function App() {
           transition: all 0.3s ease;
           position: relative;
         }
+
         .dark .note-card {
           background-color: #1f2937;
         }
+
         .note-card:hover {
           box-shadow: 0 10px 15px rgba(0, 0, 0, 0.15);
           border-color: #e0e7ff;
         }
+
         .dark .note-card:hover {
           border-color: #3730a3;
         }
+
         .note-card.completed {
           opacity: 0.75;
           border-color: #86efac;
         }
+
         .dark .note-card.completed {
           border-color: #166534;
         }
+
         .note-checkbox {
           position: absolute;
           top: 16px;
@@ -617,16 +669,20 @@ export default function App() {
           justify-content: center;
           transition: all 0.2s ease;
         }
+
         .dark .note-checkbox {
           border-color: #4b5563;
         }
+
         .note-checkbox.checked {
           background-color: #22c55e;
           border-color: #22c55e;
         }
+
         .note-checkbox:hover {
           border-color: #4f46e5;
         }
+
         .note-title {
           font-size: 20px;
           font-weight: bold;
@@ -634,13 +690,16 @@ export default function App() {
           padding-right: 32px;
           color: #111827;
         }
+
         .dark .note-title {
           color: #f3f4f6;
         }
+
         .note-title.completed {
           text-decoration: line-through;
           color: #9ca3af;
         }
+
         .note-description {
           font-size: 14px;
           margin-bottom: 16px;
@@ -651,24 +710,30 @@ export default function App() {
           -webkit-line-clamp: 3;
           -webkit-box-orient: vertical;
         }
+
         .dark .note-description {
           color: #9ca3af;
         }
+
         .note-description.completed {
           color: #9ca3af;
         }
+
         .dark .note-description.completed {
           color: #4b5563;
         }
+
         .note-actions {
           display: flex;
           gap: 8px;
           opacity: 0;
           transition: opacity 0.2s ease;
         }
+
         .note-card:hover .note-actions {
           opacity: 1;
         }
+
         .action-btn {
           flex: 1;
           display: flex;
@@ -683,34 +748,43 @@ export default function App() {
           font-weight: 500;
           transition: all 0.2s ease;
         }
+
         .action-btn-edit {
           background-color: #eef2ff;
           color: #4f46e5;
         }
+
         .dark .action-btn-edit {
           background-color: rgba(79, 70, 229, 0.2);
           color: #818cf8;
         }
+
         .action-btn-edit:hover {
           background-color: #e0e7ff;
         }
+
         .dark .action-btn-edit:hover {
           background-color: rgba(79, 70, 229, 0.3);
         }
+
         .action-btn-delete {
           background-color: #fee2e2;
           color: #ef4444;
         }
+
         .dark .action-btn-delete {
           background-color: rgba(239, 68, 68, 0.2);
           color: #f87171;
         }
+
         .action-btn-delete:hover {
           background-color: #fecaca;
         }
+
         .dark .action-btn-delete:hover {
           background-color: rgba(239, 68, 68, 0.3);
         }
+
         /* Modal */
         .modal-overlay {
           position: fixed;
@@ -723,6 +797,7 @@ export default function App() {
           background-color: rgba(0, 0, 0, 0.5);
           backdrop-filter: blur(4px);
         }
+
         .modal-content {
           background-color: white;
           border-radius: 16px;
@@ -731,23 +806,28 @@ export default function App() {
           padding: 24px;
           box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3);
         }
+
         .dark .modal-content {
           background-color: #1f2937;
         }
+
         .modal-header {
           display: flex;
           align-items: center;
           justify-content: space-between;
           margin-bottom: 24px;
         }
+
         .modal-title {
           font-size: 24px;
           font-weight: bold;
           color: #111827;
         }
+
         .dark .modal-title {
           color: #f3f4f6;
         }
+
         .modal-close {
           padding: 8px;
           border-radius: 8px;
@@ -756,21 +836,26 @@ export default function App() {
           cursor: pointer;
           transition: background-color 0.2s ease;
         }
+
         .modal-close:hover {
           background-color: #f3f4f6;
         }
+
         .dark .modal-close:hover {
           background-color: #374151;
         }
+
         .modal-form {
           display: flex;
           flex-direction: column;
           gap: 16px;
         }
+
         .form-group {
           display: flex;
           flex-direction: column;
         }
+
         .form-label {
           display: block;
           font-size: 14px;
@@ -778,9 +863,11 @@ export default function App() {
           color: #374151;
           margin-bottom: 8px;
         }
+
         .dark .form-label {
           color: #d1d5db;
         }
+
         .form-input {
           width: 100%;
           padding: 12px 16px;
@@ -793,23 +880,28 @@ export default function App() {
           font-size: 16px;
           font-family: inherit;
         }
+
         .dark .form-input {
           border-color: #374151;
           background-color: #111827;
           color: #f3f4f6;
         }
+
         .form-input:focus {
           border-color: #4f46e5;
           box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
         }
+
         .form-textarea {
           resize: none;
         }
+
         .modal-actions {
           display: flex;
           gap: 12px;
           margin-top: 24px;
         }
+
         .btn-cancel {
           flex: 1;
           padding: 12px 16px;
@@ -821,16 +913,20 @@ export default function App() {
           font-weight: 600;
           transition: all 0.2s ease;
         }
+
         .dark .btn-cancel {
           background-color: #374151;
           color: #d1d5db;
         }
+
         .btn-cancel:hover {
           background-color: #e5e7eb;
         }
+
         .dark .btn-cancel:hover {
           background-color: #4b5563;
         }
+
         .btn-save {
           flex: 1;
           padding: 12px 16px;
@@ -842,26 +938,32 @@ export default function App() {
           font-weight: 600;
           transition: all 0.2s ease;
         }
+
         .btn-save:hover:not(:disabled) {
           background: linear-gradient(to right, #4338ca, #6d28d9);
           box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
         }
+
         .btn-save:disabled {
           background: #9ca3af;
           cursor: not-allowed;
           opacity: 0.5;
         }
+
         /* Responsive */
         @media (max-width: 640px) {
           .header-logo {
             font-size: 18px;
           }
+
           .btn-primary span {
             display: none;
           }
+
           .notes-grid {
             grid-template-columns: 1fr;
           }
+
           .search-filter-bar {
             flex-direction: column;
           }
