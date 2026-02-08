@@ -1,6 +1,7 @@
 # My Notes SSR
 
-Under construction.
+SSR task management application with search capabilities, status filters, light/dark mode, and session storage. 
+Allows you to create, edit, delete, and mark notes as completed with a modern and responsive interface.
 
 
 ## ScreenShots
