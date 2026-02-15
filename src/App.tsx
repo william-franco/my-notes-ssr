@@ -1,108 +1,74 @@
-import React, { useState, useMemo } from 'react';
-import { Search, Plus, Edit2, Trash2, Check, X, Moon, Sun, Filter } from 'lucide-react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 
-// ==================== UTILS ====================
-/**
- * Check if code is running on client-side
- */
+// ============================================================================
+// TYPES & INTERFACES
+// ============================================================================
+
+type NoteColor = 'yellow' | 'green' | 'blue' | 'purple' | 'pink' | 'orange' | 'gray';
+type SortOption = 'date-desc' | 'date-asc' | 'title-asc' | 'title-desc';
+
+interface Note {
+  id: string;
+  title: string;
+  content: string;
+  color: NoteColor;
+  isPinned: boolean;
+  tags: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface NotesData {
+  notes: Note[];
+}
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
 const isClient = typeof window !== 'undefined';
 
-// ==================== MODEL ====================
-/**
- * Note Model - Represents a single note entity
- */
-class Note {
-  id: string;
-  title: string;
-  description: string;
-  completed: boolean;
-  createdAt: Date;
+const NOTE_COLORS: Record<NoteColor, { bg: string; border: string; text: string }> = {
+  yellow: { bg: '#fef3c7', border: '#fbbf24', text: '#92400e' },
+  green: { bg: '#d1fae5', border: '#10b981', text: '#065f46' },
+  blue: { bg: '#dbeafe', border: '#3b82f6', text: '#1e3a8a' },
+  purple: { bg: '#e9d5ff', border: '#8b5cf6', text: '#5b21b6' },
+  pink: { bg: '#fce7f3', border: '#ec4899', text: '#831843' },
+  orange: { bg: '#fed7aa', border: '#f97316', text: '#7c2d12' },
+  gray: { bg: '#e5e7eb', border: '#6b7280', text: '#1f2937' },
+};
 
-  constructor(
-    id: string,
-    title: string,
-    description: string,
-    completed: boolean = false,
-    createdAt: Date = new Date()
-  ) {
-    this.id = id;
-    this.title = title;
-    this.description = description;
-    this.completed = completed;
-    this.createdAt = createdAt;
-  }
+const DEFAULT_NOTES: Note[] = [
+  {
+    id: 'note_1',
+    title: 'Bem-vindo ao Notes! 📝',
+    content: 'Este é um exemplo de nota. Você pode criar, editar, excluir e organizar suas anotações.\n\nRecursos:\n• Busca e filtros avançados\n• Tags para organização\n• Fixar notas importantes\n• Múltiplas cores\n• Tema claro/escuro',
+    color: 'yellow',
+    isPinned: true,
+    tags: ['tutorial', 'importante'],
+    createdAt: Date.now() - 86400000,
+    updatedAt: Date.now() - 86400000,
+  },
+  {
+    id: 'note_2',
+    title: 'Lista de Tarefas',
+    content: '• Implementar novo feature\n• Revisar código\n• Fazer deploy\n• Documentar API',
+    color: 'green',
+    isPinned: false,
+    tags: ['trabalho', 'tarefas'],
+    createdAt: Date.now() - 172800000,
+    updatedAt: Date.now() - 172800000,
+  },
+];
 
-  /**
-   * Toggle the completion status of the note
-   */
-  toggleCompletion(): Note {
-    return new Note(
-      this.id,
-      this.title,
-      this.description,
-      !this.completed,
-      this.createdAt
-    );
-  }
+// ============================================================================
+// STORAGE SERVICE
+// ============================================================================
 
-  /**
-   * Update note data
-   */
-  update(title: string, description: string): Note {
-    return new Note(this.id, title, description, this.completed, this.createdAt);
-  }
-
-  /**
-   * Serialize note to JSON-compatible object
-   */
-  toJSON(): NoteData {
-    return {
-      id: this.id,
-      title: this.title,
-      description: this.description,
-      completed: this.completed,
-      createdAt: this.createdAt
-    };
-  }
-
-  /**
-   * Deserialize note from JSON data
-   */
-  static fromJSON(data: NoteData): Note {
-    return new Note(
-      data.id,
-      data.title,
-      data.description,
-      data.completed,
-      new Date(data.createdAt)
-    );
-  }
-}
-
-// ==================== TYPES ====================
-interface NoteData {
-  id: string;
-  title: string;
-  description: string;
-  completed: boolean;
-  createdAt: Date | string;
-}
-
-type FilterStatus = 'all' | 'pending' | 'completed';
-
-interface FormData {
-  title: string;
-  description: string;
-}
-
-// ==================== SERVICE ====================
-/**
- * StorageService - Handles all sessionStorage operations with SSR support
- */
 class StorageService {
   private static readonly STORAGE_KEYS = Object.freeze({
-    DARK_MODE: 'darkMode',
-    NOTES: 'notes',
+    DARK_MODE: 'notes_darkMode',
+    NOTES: 'notes_data',
   });
 
   /**
@@ -110,7 +76,6 @@ class StorageService {
    */
   static saveToStorage(key: string, value: any): void {
     if (!isClient) return;
-
     try {
       sessionStorage.setItem(key, JSON.stringify(value));
     } catch (error) {
@@ -123,7 +88,6 @@ class StorageService {
    */
   static loadFromStorage<T>(key: string, defaultValue: T): T {
     if (!isClient) return defaultValue;
-
     try {
       const saved = sessionStorage.getItem(key);
       return saved ? JSON.parse(saved) : defaultValue;
@@ -138,7 +102,6 @@ class StorageService {
    */
   static clearStorage(): void {
     if (!isClient) return;
-
     try {
       sessionStorage.removeItem(this.STORAGE_KEYS.DARK_MODE);
       sessionStorage.removeItem(this.STORAGE_KEYS.NOTES);
@@ -155,881 +118,1719 @@ class StorageService {
   }
 }
 
-// ==================== CONTROLLER ====================
+// ============================================================================
+// MODEL LAYER
+// ============================================================================
+
 /**
- * NotesController - Handles business logic and data management
+ * Notes Model - Handles data structure and business logic
  */
-class NotesController {
-  /**
-   * Generate unique ID for new notes
-   */
-  static generateId(): string {
-    return Date.now().toString(36) + Math.random().toString(36).substring(2);
+class NotesModel {
+  private notes: Note[];
+
+  constructor(initialNotes?: Note[]) {
+    this.notes = initialNotes || [...DEFAULT_NOTES];
   }
 
   /**
-   * Load dark mode from storage using StorageService
+   * Get all notes
    */
-  static loadDarkMode(): boolean {
-    return StorageService.loadFromStorage<boolean>(
-      StorageService.getKeys().DARK_MODE,
-      false
-    );
+  getAllNotes(): Note[] {
+    return [...this.notes];
   }
 
   /**
-   * Save dark mode to storage using StorageService
+   * Get note by ID
    */
-  static saveDarkMode(isDarkMode: boolean): void {
-    StorageService.saveToStorage(
-      StorageService.getKeys().DARK_MODE,
-      isDarkMode
-    );
+  getNoteById(id: string): Note | null {
+    return this.notes.find(n => n.id === id) || null;
   }
 
   /**
-   * Load notes from storage using StorageService
+   * Add new note
    */
-  static loadNotes(): Note[] {
-    const defaultNotes = [
-      new Note(
-        '1',
-        'Bem-vindo!',
-        'Este é seu sistema de anotações. Clique em "Nova Nota" para começar.',
-        false,
-        new Date('2025-11-01')
-      ),
-    ];
+  addNote(note: Omit<Note, 'id' | 'createdAt' | 'updatedAt'>): Note {
+    const newNote: Note = {
+      ...note,
+      id: `note_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    this.notes.unshift(newNote);
+    return newNote;
+  }
 
-    const notesData = StorageService.loadFromStorage<NoteData[]>(
-      StorageService.getKeys().NOTES,
-      []
-    );
+  /**
+   * Update existing note
+   */
+  updateNote(id: string, updates: Partial<Note>): Note | null {
+    const index = this.notes.findIndex(n => n.id === id);
+    if (index === -1) return null;
 
-    if (notesData.length === 0) {
-      return defaultNotes;
+    this.notes[index] = {
+      ...this.notes[index],
+      ...updates,
+      updatedAt: Date.now(),
+    };
+    return this.notes[index];
+  }
+
+  /**
+   * Delete note by ID
+   */
+  deleteNote(id: string): boolean {
+    const initialLength = this.notes.length;
+    this.notes = this.notes.filter(n => n.id !== id);
+    return this.notes.length < initialLength;
+  }
+
+  /**
+   * Toggle pin status
+   */
+  togglePin(id: string): Note | null {
+    const note = this.notes.find(n => n.id === id);
+    if (!note) return null;
+
+    note.isPinned = !note.isPinned;
+    note.updatedAt = Date.now();
+
+    // Move pinned notes to top
+    if (note.isPinned) {
+      this.notes = this.notes.filter(n => n.id !== id);
+      this.notes.unshift(note);
     }
 
-    return notesData.map(data => Note.fromJSON(data));
+    return note;
   }
 
   /**
-   * Save notes to storage using StorageService
+   * Search notes by term (searches in title, content, and tags)
    */
-  static saveNotes(notes: Note[]): void {
-    const serialized = notes.map(note => note.toJSON());
-    StorageService.saveToStorage(
-      StorageService.getKeys().NOTES,
-      serialized
+  searchNotes(term: string): Note[] {
+    const lowerTerm = term.toLowerCase();
+    return this.notes.filter(n =>
+      n.title.toLowerCase().includes(lowerTerm) ||
+      n.content.toLowerCase().includes(lowerTerm) ||
+      n.tags.some(tag => tag.toLowerCase().includes(lowerTerm))
     );
   }
 
   /**
-   * Filter notes based on search term and filter status
+   * Filter notes by color
    */
-  static filterNotes(
-    notes: Note[],
-    searchTerm: string,
-    filterStatus: FilterStatus
-  ): Note[] {
-    return notes.filter(note => {
-      const matchesSearch =
-        note.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        note.description.toLowerCase().includes(searchTerm.toLowerCase());
+  filterByColor(color: NoteColor): Note[] {
+    return this.notes.filter(n => n.color === color);
+  }
 
-      const matchesFilter =
-        filterStatus === 'all' ||
-        (filterStatus === 'completed' && note.completed) ||
-        (filterStatus === 'pending' && !note.completed);
+  /**
+   * Filter notes by tag
+   */
+  filterByTag(tag: string): Note[] {
+    return this.notes.filter(n => n.tags.includes(tag));
+  }
 
-      return matchesSearch && matchesFilter;
+  /**
+   * Get all unique tags from notes
+   */
+  getAllTags(): string[] {
+    const tagsSet = new Set<string>();
+    this.notes.forEach(note => {
+      note.tags.forEach(tag => tagsSet.add(tag));
+    });
+    return Array.from(tagsSet).sort();
+  }
+
+  /**
+   * Sort notes by specified option
+   */
+  sortNotes(notes: Note[], sortBy: SortOption): Note[] {
+    const sorted = [...notes];
+
+    // Always keep pinned notes at the top
+    const pinned = sorted.filter(n => n.isPinned);
+    const unpinned = sorted.filter(n => !n.isPinned);
+
+    const sortFunction = (arr: Note[]) => {
+      switch (sortBy) {
+        case 'date-desc':
+          return arr.sort((a, b) => b.updatedAt - a.updatedAt);
+        case 'date-asc':
+          return arr.sort((a, b) => a.updatedAt - b.updatedAt);
+        case 'title-asc':
+          return arr.sort((a, b) => a.title.localeCompare(b.title));
+        case 'title-desc':
+          return arr.sort((a, b) => b.title.localeCompare(a.title));
+        default:
+          return arr;
+      }
+    };
+
+    return [...sortFunction(pinned), ...sortFunction(unpinned)];
+  }
+
+  /**
+   * Sync to storage
+   */
+  syncToStorage(): void {
+    StorageService.saveToStorage(StorageService.getKeys().NOTES, {
+      notes: this.notes,
     });
   }
 
   /**
-   * Create a new note
+   * Load from storage
    */
-  static createNote(title: string, description: string): Note {
-    return new Note(this.generateId(), title, description);
-  }
-
-  /**
-   * Clear all data using StorageService
-   */
-  static clearAllData(): void {
-    StorageService.clearStorage();
+  static loadFromStorage(): NotesModel {
+    const data = StorageService.loadFromStorage<NotesData | null>(
+      StorageService.getKeys().NOTES,
+      null
+    );
+    return new NotesModel(data?.notes);
   }
 }
 
-// ==================== VIEW ====================
+// ============================================================================
+// CONTROLLER LAYER
+// ============================================================================
+
 /**
- * NotesApp Component - Main view with SSR support
+ * Notes Controller - Manages state and coordinates between Model and View
  */
-export default function NotesApp() {
-  // State management with SSR-safe initialization
-  const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [searchTerm, setSearchTerm] = useState<string>('');
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
-  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
-  const [editingNote, setEditingNote] = useState<Note | null>(null);
-  const [formData, setFormData] = useState<FormData>({ title: '', description: '' });
-  const [isHydrated, setIsHydrated] = useState<boolean>(false);
+class NotesController {
+  private model: NotesModel;
+  private listeners: Set<() => void>;
 
-  // Hydration effect - load data only on client-side
-  React.useEffect(() => {
-    setIsDarkMode(NotesController.loadDarkMode());
-    setNotes(NotesController.loadNotes());
-    setIsHydrated(true);
-  }, []);
+  constructor(model: NotesModel) {
+    this.model = model;
+    this.listeners = new Set();
+  }
 
-  // Sync dark mode to sessionStorage (client-side only)
-  React.useEffect(() => {
-    if (!isHydrated) return;
-    NotesController.saveDarkMode(isDarkMode);
-  }, [isDarkMode, isHydrated]);
+  /**
+   * Subscribe to changes
+   */
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
 
-  // Sync notes to sessionStorage (client-side only)
-  React.useEffect(() => {
-    if (!isHydrated) return;
-    NotesController.saveNotes(notes);
-  }, [notes, isHydrated]);
+  /**
+   * Notify all listeners of changes
+   */
+  private notify(): void {
+    this.listeners.forEach(listener => listener());
+    this.model.syncToStorage();
+  }
 
-  // Filtered notes - memoized for performance
-  const filteredNotes = useMemo(
-    () => NotesController.filterNotes(notes, searchTerm, filterStatus),
-    [notes, searchTerm, filterStatus]
+  // ==================== NOTE OPERATIONS ====================
+
+  getAllNotes(): Note[] {
+    return this.model.getAllNotes();
+  }
+
+  getNoteById(id: string): Note | null {
+    return this.model.getNoteById(id);
+  }
+
+  addNote(note: Omit<Note, 'id' | 'createdAt' | 'updatedAt'>): void {
+    this.model.addNote(note);
+    this.notify();
+  }
+
+  updateNote(id: string, updates: Partial<Note>): void {
+    this.model.updateNote(id, updates);
+    this.notify();
+  }
+
+  deleteNote(id: string): void {
+    this.model.deleteNote(id);
+    this.notify();
+  }
+
+  togglePin(id: string): void {
+    this.model.togglePin(id);
+    this.notify();
+  }
+
+  // ==================== SEARCH & FILTER ====================
+
+  searchNotes(term: string): Note[] {
+    return this.model.searchNotes(term);
+  }
+
+  filterByColor(color: NoteColor): Note[] {
+    return this.model.filterByColor(color);
+  }
+
+  filterByTag(tag: string): Note[] {
+    return this.model.filterByTag(tag);
+  }
+
+  getAllTags(): string[] {
+    return this.model.getAllTags();
+  }
+
+  sortNotes(notes: Note[], sortBy: SortOption): Note[] {
+    return this.model.sortNotes(notes, sortBy);
+  }
+}
+
+// ============================================================================
+// VIEW COMPONENTS
+// ============================================================================
+
+/**
+ * Header Component with theme toggle
+ */
+const Header: React.FC<{
+  darkMode: boolean;
+  toggleTheme: () => void;
+  onAddNote: () => void;
+  noteCount: number;
+}> = ({ darkMode, toggleTheme, onAddNote, noteCount }) => {
+  return (
+    <header className="header">
+      <div className="header-content">
+        <div className="header-title">
+          <svg className="header-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+          </svg>
+          <div>
+            <h1>Notes</h1>
+            <span className="note-count">{noteCount} {noteCount === 1 ? 'nota' : 'notas'}</span>
+          </div>
+        </div>
+        <div className="header-actions">
+          <button onClick={onAddNote} className="btn-add-note">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            Nova Nota
+          </button>
+          <button onClick={toggleTheme} className="theme-toggle" aria-label="Toggle theme">
+            {darkMode ? (
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+              </svg>
+            ) : (
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+              </svg>
+            )}
+          </button>
+        </div>
+      </div>
+    </header>
   );
+};
 
-  // Event handlers
-  const handleSaveNote = (): void => {
-    if (!formData.title.trim()) return;
+/**
+ * Search and Filter Bar Component
+ */
+const FilterBar: React.FC<{
+  searchTerm: string;
+  onSearchChange: (term: string) => void;
+  selectedColor: NoteColor | null;
+  onColorFilter: (color: NoteColor | null) => void;
+  selectedTag: string | null;
+  onTagFilter: (tag: string | null) => void;
+  tags: string[];
+  sortBy: SortOption;
+  onSortChange: (sort: SortOption) => void;
+}> = ({
+  searchTerm,
+  onSearchChange,
+  selectedColor,
+  onColorFilter,
+  selectedTag,
+  onTagFilter,
+  tags,
+  sortBy,
+  onSortChange
+}) => {
+    return (
+      <div className="filter-bar">
+        <div className="search-box">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          <input
+            type="text"
+            placeholder="Buscar notas..."
+            value={searchTerm}
+            onChange={e => onSearchChange(e.target.value)}
+          />
+          {searchTerm && (
+            <button onClick={() => onSearchChange('')} className="clear-search">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
 
-    if (editingNote) {
-      // Update existing note
-      setNotes(notes.map(note =>
-        note.id === editingNote.id
-          ? note.update(formData.title, formData.description)
-          : note
-      ));
-    } else {
-      // Create new note
-      const newNote = NotesController.createNote(formData.title, formData.description);
-      setNotes([newNote, ...notes]);
+        <div className="filters-row">
+          <div className="color-filters">
+            <span className="filter-label">Cor:</span>
+            <button
+              onClick={() => onColorFilter(null)}
+              className={`color-filter-btn ${!selectedColor ? 'active' : ''}`}
+            >
+              Todas
+            </button>
+            {(Object.keys(NOTE_COLORS) as NoteColor[]).map(color => (
+              <button
+                key={color}
+                onClick={() => onColorFilter(selectedColor === color ? null : color)}
+                className={`color-filter ${selectedColor === color ? 'active' : ''}`}
+                style={{ backgroundColor: NOTE_COLORS[color].bg, borderColor: NOTE_COLORS[color].border }}
+                title={color}
+              />
+            ))}
+          </div>
+
+          {tags.length > 0 && (
+            <div className="tag-filters">
+              <span className="filter-label">Tag:</span>
+              <button
+                onClick={() => onTagFilter(null)}
+                className={`tag-filter ${!selectedTag ? 'active' : ''}`}
+              >
+                Todas
+              </button>
+              {tags.map(tag => (
+                <button
+                  key={tag}
+                  onClick={() => onTagFilter(selectedTag === tag ? null : tag)}
+                  className={`tag-filter ${selectedTag === tag ? 'active' : ''}`}
+                >
+                  #{tag}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="sort-select">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12" />
+            </svg>
+            <select value={sortBy} onChange={e => onSortChange(e.target.value as SortOption)}>
+              <option value="date-desc">Mais recentes</option>
+              <option value="date-asc">Mais antigas</option>
+              <option value="title-asc">Título (A-Z)</option>
+              <option value="title-desc">Título (Z-A)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+/**
+ * Note Card Component
+ */
+const NoteCard: React.FC<{
+  note: Note;
+  onEdit: () => void;
+  onDelete: () => void;
+  onTogglePin: () => void;
+}> = ({ note, onEdit, onDelete, onTogglePin }) => {
+  const colors = NOTE_COLORS[note.color];
+
+  const formatDate = (timestamp: number) => {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return 'Agora';
+    if (diffMins < 60) return `${diffMins}m atrás`;
+    if (diffHours < 24) return `${diffHours}h atrás`;
+    if (diffDays < 7) return `${diffDays}d atrás`;
+
+    return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
+  };
+
+  return (
+    <div
+      className="note-card"
+      style={{
+        backgroundColor: colors.bg,
+        borderColor: colors.border,
+      }}
+      onClick={onEdit}
+    >
+      {note.isPinned && (
+        <div className="pin-badge">
+          <svg fill="currentColor" viewBox="0 0 24 24">
+            <path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z" />
+          </svg>
+        </div>
+      )}
+
+      <div className="note-card-header">
+        <h3 className="note-title" style={{ color: colors.text }}>{note.title}</h3>
+        <div className="note-actions">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onTogglePin();
+            }}
+            className="note-action-btn"
+            style={{ color: colors.text }}
+            aria-label={note.isPinned ? 'Desafixar' : 'Fixar'}
+          >
+            <svg fill={note.isPinned ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+            </svg>
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            className="note-action-btn"
+            style={{ color: colors.text }}
+            aria-label="Excluir"
+          >
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <p className="note-content" style={{ color: colors.text }}>
+        {note.content.length > 200 ? `${note.content.substring(0, 200)}...` : note.content}
+      </p>
+
+      <div className="note-footer">
+        <div className="note-tags">
+          {note.tags.map(tag => (
+            <span key={tag} className="note-tag" style={{ backgroundColor: colors.border, color: '#fff' }}>
+              #{tag}
+            </span>
+          ))}
+        </div>
+        <span className="note-date" style={{ color: colors.text }}>
+          {formatDate(note.updatedAt)}
+        </span>
+      </div>
+    </div>
+  );
+};
+
+/**
+ * Note Editor Modal
+ */
+const NoteEditorModal: React.FC<{
+  isOpen: boolean;
+  note: Note | null;
+  onClose: () => void;
+  onSave: (note: Omit<Note, 'id' | 'createdAt' | 'updatedAt'>) => void;
+}> = ({ isOpen, note, onClose, onSave }) => {
+  const [title, setTitle] = useState('');
+  const [content, setContent] = useState('');
+  const [color, setColor] = useState<NoteColor>('yellow');
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState('');
+  const titleInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      if (note) {
+        setTitle(note.title);
+        setContent(note.content);
+        setColor(note.color);
+        setTags(note.tags);
+      } else {
+        setTitle('');
+        setContent('');
+        setColor('yellow');
+        setTags([]);
+      }
+      setTagInput('');
+      setTimeout(() => {
+        titleInputRef.current?.focus();
+      }, 100);
     }
+  }, [isOpen, note]);
 
-    closeModal();
+  if (!isOpen) return null;
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim()) return;
+
+    onSave({
+      title: title.trim(),
+      content: content.trim(),
+      color,
+      isPinned: note?.isPinned || false,
+      tags,
+    });
+    onClose();
   };
 
-  const handleDeleteNote = (id: string): void => {
-    setNotes(notes.filter(note => note.id !== id));
+  const handleAddTag = () => {
+    const newTag = tagInput.trim().toLowerCase();
+    if (newTag && !tags.includes(newTag)) {
+      setTags([...tags, newTag]);
+      setTagInput('');
+    }
   };
 
-  const toggleNoteCompletion = (id: string): void => {
-    setNotes(notes.map(note =>
-      note.id === id ? note.toggleCompletion() : note
-    ));
+  const handleRemoveTag = (tagToRemove: string) => {
+    setTags(tags.filter(tag => tag !== tagToRemove));
   };
 
-  const openCreateModal = (): void => {
-    setEditingNote(null);
-    setFormData({ title: '', description: '' });
-    setIsModalOpen(true);
-  };
-
-  const openEditModal = (note: Note): void => {
-    setEditingNote(note);
-    setFormData({ title: note.title, description: note.description });
-    setIsModalOpen(true);
-  };
-
-  const closeModal = (): void => {
-    setIsModalOpen(false);
-    setEditingNote(null);
-    setFormData({ title: '', description: '' });
-  };
-
-  const handleClearData = (): void => {
-    if (!isClient) return;
-
-    if (window.confirm('Tem certeza que deseja limpar todos os dados? Esta ação não pode ser desfeita.')) {
-      NotesController.clearAllData();
-      setNotes([]);
-      setSearchTerm('');
-      setFilterStatus('all');
+  const handleTagInputKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleAddTag();
     }
   };
 
   return (
-    <>
-      <style>{APP_STYLES}</style>
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal note-editor-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>{note ? 'Editar Nota' : 'Nova Nota'}</h2>
+          <button onClick={onClose} className="modal-close">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
 
-      <div className={`notes-app ${isDarkMode ? 'dark' : ''}`}>
-        {/* Header */}
-        <header className="header">
-          <div className="header-container">
-            <div className="header-logo">
-              <div className="logo-icon">
-                <Check size={24} color="#ffffff" />
-              </div>
-              <h1 className="logo-text">Minhas Anotações</h1>
-            </div>
-            <div className="header-actions">
-              <button onClick={handleClearData} className="btn btn-clear">
-                Limpar Dados
-              </button>
-              <button onClick={() => setIsDarkMode(!isDarkMode)} className="btn btn-theme">
-                {isDarkMode ? <Sun size={20} color="#fbbf24" /> : <Moon size={20} color="#4f46e5" />}
-              </button>
-              <button onClick={openCreateModal} className="btn btn-primary">
-                <Plus size={20} />
-                <span>Nova Nota</span>
-              </button>
-            </div>
-          </div>
-        </header>
-
-        {/* Main Content */}
-        <main className="main-content">
-          {/* Search and Filter Bar */}
-          <div className="search-filter-bar">
-            <div className="search-container">
-              <Search size={20} className="search-icon" />
-              <input
-                type="text"
-                placeholder="Pesquisar anotações..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="search-input"
-              />
-            </div>
-            <div className="filter-buttons">
-              <button
-                onClick={() => setFilterStatus('all')}
-                className={`filter-btn ${filterStatus === 'all' ? 'active' : ''}`}
-              >
-                Todas
-              </button>
-              <button
-                onClick={() => setFilterStatus('pending')}
-                className={`filter-btn ${filterStatus === 'pending' ? 'active' : ''}`}
-              >
-                Pendentes
-              </button>
-              <button
-                onClick={() => setFilterStatus('completed')}
-                className={`filter-btn ${filterStatus === 'completed' ? 'active' : ''}`}
-              >
-                Concluídas
-              </button>
-            </div>
+        <form onSubmit={handleSubmit} className="note-editor-form">
+          <div className="form-group">
+            <label>Título *</label>
+            <input
+              ref={titleInputRef}
+              type="text"
+              value={title}
+              onChange={e => setTitle(e.target.value)}
+              placeholder="Digite o título da nota"
+              required
+            />
           </div>
 
-          {/* Notes Grid */}
-          {filteredNotes.length === 0 ? (
-            <div className="empty-state">
-              <div className="empty-icon">
-                <Filter size={40} color="#9ca3af" />
-              </div>
-              <p className="empty-text">
-                {notes.length === 0 ? 'Nenhuma anotação criada ainda' : 'Nenhuma anotação encontrada'}
-              </p>
-            </div>
-          ) : (
-            <div className="notes-grid">
-              {filteredNotes.map(note => (
-                <div key={note.id} className={`note-card ${note.completed ? 'completed' : ''}`}>
-                  <button
-                    onClick={() => toggleNoteCompletion(note.id)}
-                    className={`note-checkbox ${note.completed ? 'checked' : ''}`}
-                  >
-                    {note.completed && <Check size={16} color="#ffffff" />}
-                  </button>
-                  <h3 className={`note-title ${note.completed ? 'completed' : ''}`}>
-                    {note.title}
-                  </h3>
-                  <p className={`note-description ${note.completed ? 'completed' : ''}`}>
-                    {note.description || 'Sem descrição'}
-                  </p>
-                  <div className="note-actions">
-                    <button onClick={() => openEditModal(note)} className="action-btn action-btn-edit">
-                      <Edit2 size={16} />
-                      Editar
-                    </button>
-                    <button onClick={() => handleDeleteNote(note.id)} className="action-btn action-btn-delete">
-                      <Trash2 size={16} />
-                      Excluir
-                    </button>
-                  </div>
-                </div>
+          <div className="form-group">
+            <label>Conteúdo</label>
+            <textarea
+              value={content}
+              onChange={e => setContent(e.target.value)}
+              placeholder="Digite o conteúdo da nota..."
+              rows={8}
+            />
+          </div>
+
+          <div className="form-group">
+            <label>Cor da Nota</label>
+            <div className="color-picker">
+              {(Object.keys(NOTE_COLORS) as NoteColor[]).map(noteColor => (
+                <button
+                  key={noteColor}
+                  type="button"
+                  className={`color-option ${color === noteColor ? 'selected' : ''}`}
+                  style={{
+                    backgroundColor: NOTE_COLORS[noteColor].bg,
+                    borderColor: NOTE_COLORS[noteColor].border,
+                  }}
+                  onClick={() => setColor(noteColor)}
+                  title={noteColor}
+                />
               ))}
             </div>
-          )}
-        </main>
+          </div>
 
-        {/* Modal */}
-        {isModalOpen && (
-          <div className="modal-overlay">
-            <div className="modal-content">
-              <div className="modal-header">
-                <h2 className="modal-title">
-                  {editingNote ? 'Editar Anotação' : 'Nova Anotação'}
-                </h2>
-                <button onClick={closeModal} className="modal-close">
-                  <X size={20} color={isDarkMode ? '#9ca3af' : '#6b7280'} />
-                </button>
+          <div className="form-group">
+            <label>Tags</label>
+            <div className="tags-input-container">
+              <div className="tags-display">
+                {tags.map(tag => (
+                  <span key={tag} className="tag-chip">
+                    #{tag}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTag(tag)}
+                      className="tag-remove"
+                    >
+                      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </span>
+                ))}
               </div>
-              <div className="modal-form">
-                <div className="form-group">
-                  <label className="form-label">Título *</label>
-                  <input
-                    type="text"
-                    value={formData.title}
-                    onChange={(e) => setFormData({ ...formData, title: e.target.value })}
-                    placeholder="Digite o título da anotação"
-                    className="form-input"
-                    autoFocus
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Descrição</label>
-                  <textarea
-                    value={formData.description}
-                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                    placeholder="Digite a descrição (opcional)"
-                    rows={4}
-                    className="form-input form-textarea"
-                  />
-                </div>
-              </div>
-              <div className="modal-actions">
-                <button onClick={closeModal} className="btn-cancel">
-                  Cancelar
-                </button>
-                <button onClick={handleSaveNote} disabled={!formData.title.trim()} className="btn-save">
-                  {editingNote ? 'Salvar Alterações' : 'Criar Anotação'}
+              <div className="tag-input-wrapper">
+                <input
+                  type="text"
+                  value={tagInput}
+                  onChange={e => setTagInput(e.target.value)}
+                  onKeyDown={handleTagInputKeyDown}
+                  placeholder="Adicionar tag..."
+                />
+                <button type="button" onClick={handleAddTag} className="btn-add-tag">
+                  Adicionar
                 </button>
               </div>
             </div>
           </div>
-        )}
+
+          <div className="modal-actions">
+            <button type="button" onClick={onClose} className="btn-secondary">
+              Cancelar
+            </button>
+            <button type="submit" className="btn-primary">
+              {note ? 'Salvar' : 'Criar'}
+            </button>
+          </div>
+        </form>
       </div>
-    </>
+    </div>
   );
-}
+};
+
+/**
+ * Empty State Component
+ */
+const EmptyState: React.FC<{ message: string; showAddButton?: boolean; onAddNote?: () => void }> = ({
+  message,
+  showAddButton,
+  onAddNote
+}) => {
+  return (
+    <div className="empty-state">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+      </svg>
+      <p>{message}</p>
+      {showAddButton && onAddNote && (
+        <button onClick={onAddNote} className="btn-primary">
+          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+          Criar Primeira Nota
+        </button>
+      )}
+    </div>
+  );
+};
+
+// ============================================================================
+// MAIN APP COMPONENT
+// ============================================================================
+
+const App: React.FC = () => {
+  // Initialize dark mode from storage
+  const [darkMode, setDarkMode] = useState(() => {
+    return StorageService.loadFromStorage(StorageService.getKeys().DARK_MODE, false);
+  });
+
+  // Initialize controller with model loaded from storage
+  const [controller] = useState(() => {
+    const model = NotesModel.loadFromStorage();
+    return new NotesController(model);
+  });
+
+  // State management - CORRIGIDO: usar contador numérico em vez de objeto
+  const [updateTrigger, setUpdateTrigger] = useState(0);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedColor, setSelectedColor] = useState<NoteColor | null>(null);
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [sortBy, setSortBy] = useState<SortOption>('date-desc');
+  const [editorModal, setEditorModal] = useState<{ isOpen: boolean; note: Note | null }>({
+    isOpen: false,
+    note: null,
+  });
+
+  // Subscribe to controller changes - CORRIGIDO: usar setUpdateTrigger
+  useEffect(() => {
+    const unsubscribe = controller.subscribe(() => {
+      setUpdateTrigger(prev => prev + 1);
+    });
+    return unsubscribe;
+  }, [controller]);
+
+  // Update dark mode in DOM and storage
+  useEffect(() => {
+    if (isClient) {
+      document.documentElement.setAttribute('data-theme', darkMode ? 'dark' : 'light');
+      StorageService.saveToStorage(StorageService.getKeys().DARK_MODE, darkMode);
+    }
+  }, [darkMode]);
+
+  // Get data from controller
+  const allTags = controller.getAllTags();
+
+  // Compute filtered and sorted notes - CORRIGIDO: adicionar updateTrigger às dependências
+  const displayedNotes = useMemo(() => {
+    let notes = controller.getAllNotes();
+
+    // Apply search filter
+    if (searchTerm) {
+      notes = controller.searchNotes(searchTerm).filter(n =>
+        notes.some(note => note.id === n.id)
+      );
+    }
+
+    // Apply color filter
+    if (selectedColor) {
+      notes = controller.filterByColor(selectedColor).filter(n =>
+        notes.some(note => note.id === n.id)
+      );
+    }
+
+    // Apply tag filter
+    if (selectedTag) {
+      notes = controller.filterByTag(selectedTag).filter(n =>
+        notes.some(note => note.id === n.id)
+      );
+    }
+
+    // Apply sorting
+    return controller.sortNotes(notes, sortBy);
+  }, [controller, searchTerm, selectedColor, selectedTag, sortBy, updateTrigger]);
+
+  // Handlers
+  const toggleTheme = () => setDarkMode(!darkMode);
+
+  const handleAddNote = () => {
+    setEditorModal({ isOpen: true, note: null });
+  };
+
+  const handleEditNote = (note: Note) => {
+    setEditorModal({ isOpen: true, note });
+  };
+
+  const handleSaveNote = (noteData: Omit<Note, 'id' | 'createdAt' | 'updatedAt'>) => {
+    if (editorModal.note) {
+      controller.updateNote(editorModal.note.id, noteData);
+    } else {
+      controller.addNote(noteData);
+    }
+  };
+
+  const handleDeleteNote = (noteId: string) => {
+    if (confirm('Deseja realmente excluir esta nota?')) {
+      controller.deleteNote(noteId);
+    }
+  };
+
+  const handleTogglePin = (noteId: string) => {
+    controller.togglePin(noteId);
+  };
+
+  const allNotes = controller.getAllNotes();
+  const hasNotes = allNotes.length > 0;
+
+  return (
+    <div className="app">
+      <Header
+        darkMode={darkMode}
+        toggleTheme={toggleTheme}
+        onAddNote={handleAddNote}
+        noteCount={allNotes.length}
+      />
+
+      {hasNotes && (
+        <FilterBar
+          searchTerm={searchTerm}
+          onSearchChange={setSearchTerm}
+          selectedColor={selectedColor}
+          onColorFilter={setSelectedColor}
+          selectedTag={selectedTag}
+          onTagFilter={setSelectedTag}
+          tags={allTags}
+          sortBy={sortBy}
+          onSortChange={setSortBy}
+        />
+      )}
+
+      <main className="main-content">
+        {!hasNotes ? (
+          <EmptyState
+            message="Nenhuma nota criada ainda"
+            showAddButton
+            onAddNote={handleAddNote}
+          />
+        ) : displayedNotes.length === 0 ? (
+          <EmptyState
+            message={
+              searchTerm
+                ? `Nenhuma nota encontrada para "${searchTerm}"`
+                : selectedColor
+                  ? 'Nenhuma nota com esta cor'
+                  : selectedTag
+                    ? `Nenhuma nota com a tag #${selectedTag}`
+                    : 'Nenhuma nota encontrada'
+            }
+          />
+        ) : (
+          <div className="notes-grid">
+            {displayedNotes.map(note => (
+              <NoteCard
+                key={note.id}
+                note={note}
+                onEdit={() => handleEditNote(note)}
+                onDelete={() => handleDeleteNote(note.id)}
+                onTogglePin={() => handleTogglePin(note.id)}
+              />
+            ))}
+          </div>
+        )}
+      </main>
+
+      <NoteEditorModal
+        isOpen={editorModal.isOpen}
+        note={editorModal.note}
+        onClose={() => setEditorModal({ isOpen: false, note: null })}
+        onSave={handleSaveNote}
+      />
+    </div>
+  );
+};
 
 // ============================================================================
 // STYLES
 // ============================================================================
+
 const APP_STYLES = `
-  /* Global Styles */
-  * {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
+:root {
+  --primary: #3b82f6;
+  --primary-dark: #2563eb;
+  --success: #10b981;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --card-bg: #ffffff;
+  --text: #0f172a;
+  --text-secondary: #64748b;
+  --border: #e2e8f0;
+  --shadow: rgba(0, 0, 0, 0.1);
+  --shadow-lg: rgba(0, 0, 0, 0.15);
+  
+  --header-bg: #ffffff;
+  --header-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="dark"] {
+  --bg: #0f172a;
+  --surface: #1e293b;
+  --card-bg: #1e293b;
+  --text: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --border: #334155;
+  --shadow: rgba(0, 0, 0, 0.3);
+  --shadow-lg: rgba(0, 0, 0, 0.5);
+  
+  --header-bg: #1e293b;
+  --header-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.3);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--bg);
+  color: var(--text);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header Styles */
+.header {
+  background: var(--header-bg);
+  box-shadow: var(--header-shadow);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  transition: background-color 0.3s ease;
+}
+
+.header-content {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 1rem 2rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.header-title {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.header-icon {
+  width: 32px;
+  height: 32px;
+  color: var(--primary);
+}
+
+.header-title h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.note-count {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.btn-add-note {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.25rem;
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-add-note:hover {
+  background: var(--primary-dark);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+}
+
+.btn-add-note svg {
+  width: 20px;
+  height: 20px;
+}
+
+.theme-toggle {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: none;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 4px var(--shadow);
+}
+
+.theme-toggle:hover {
+  transform: scale(1.05);
+  background: var(--primary);
+  color: white;
+}
+
+.theme-toggle svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Filter Bar */
+.filter-bar {
+  background: var(--header-bg);
+  padding: 1rem 2rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.search-box {
+  position: relative;
+  margin-bottom: 1rem;
+}
+
+.search-box svg {
+  position: absolute;
+  left: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  color: var(--text-secondary);
+}
+
+.search-box input {
+  width: 100%;
+  padding: 0.75rem 3rem 0.75rem 3rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.9375rem;
+  transition: all 0.2s ease;
+}
+
+.search-box input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.clear-search {
+  position: absolute;
+  right: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.clear-search:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.clear-search svg {
+  width: 16px;
+  height: 16px;
+}
+
+.filters-row {
+  display: flex;
+  gap: 2rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.color-filters,
+.tag-filters {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.filter-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.color-filter-btn {
+  padding: 0.5rem 1rem;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.color-filter-btn:hover,
+.color-filter-btn.active {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+.color-filter {
+  width: 32px;
+  height: 32px;
+  border: 2px solid;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.color-filter:hover {
+  transform: scale(1.1);
+}
+
+.color-filter.active {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--primary);
+  transform: scale(1.15);
+}
+
+.tag-filter {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tag-filter:hover {
+  background: var(--border);
+}
+
+.tag-filter.active {
+  background: var(--primary);
+  color: white;
+  border-color: var(--primary);
+}
+
+.sort-select {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.sort-select svg {
+  width: 20px;
+  height: 20px;
+  color: var(--text-secondary);
+}
+
+.sort-select select {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.sort-select select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+/* Main Content */
+.main-content {
+  flex: 1;
+  max-width: 1400px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.notes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1.5rem;
+}
+
+/* Note Card */
+.note-card {
+  border-radius: 12px;
+  padding: 1.25rem;
+  border: 2px solid;
+  box-shadow: 0 2px 8px var(--shadow);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.note-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 16px var(--shadow-lg);
+}
+
+.pin-badge {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.6;
+}
+
+.pin-badge svg {
+  width: 16px;
+  height: 16px;
+}
+
+.note-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.note-title {
+  flex: 1;
+  font-size: 1.125rem;
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.note-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.note-action-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  opacity: 0.7;
+}
+
+.note-action-btn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.8);
+  transform: scale(1.1);
+}
+
+.note-action-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.note-content {
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  margin-bottom: 1rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.note-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.note-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.note-tag {
+  padding: 0.25rem 0.625rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.note-date {
+  font-size: 0.75rem;
+  font-weight: 500;
+  opacity: 0.8;
+}
+
+/* Modal */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.modal {
+  background: var(--surface);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 700px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px var(--shadow-lg);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.modal-close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.modal-close:hover {
+  background: var(--danger);
+  color: white;
+}
+
+.modal-close svg {
+  width: 20px;
+  height: 20px;
+}
+
+.note-editor-form {
+  padding: 1.5rem;
+}
+
+.form-group {
+  margin-bottom: 1.5rem;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+  color: var(--text);
+  font-size: 0.875rem;
+}
+
+.form-group input,
+.form-group textarea {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text);
+  font-size: 0.9375rem;
+  transition: all 0.2s ease;
+  font-family: inherit;
+}
+
+.form-group input:focus,
+.form-group textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.form-group textarea {
+  resize: vertical;
+  min-height: 150px;
+}
+
+.color-picker {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.color-option {
+  width: 48px;
+  height: 48px;
+  border: 3px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.color-option:hover {
+  transform: scale(1.1);
+}
+
+.color-option.selected {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--primary);
+  transform: scale(1.15);
+}
+
+.tags-input-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tags-display {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tag-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  background: var(--primary);
+  color: white;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.tag-remove {
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.tag-remove:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.tag-remove svg {
+  width: 10px;
+  height: 10px;
+}
+
+.tag-input-wrapper {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.tag-input-wrapper input {
+  flex: 1;
+}
+
+.btn-add-tag {
+  padding: 0.75rem 1.25rem;
+  border: none;
+  border-radius: 8px;
+  background: var(--border);
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.btn-add-tag:hover {
+  background: var(--text-secondary);
+  color: white;
+}
+
+.modal-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  margin-top: 1.5rem;
+}
+
+.btn-primary,
+.btn-secondary {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 0.9375rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.btn-primary {
+  background: var(--primary);
+  color: white;
+}
+
+.btn-primary:hover {
+  background: var(--primary-dark);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+}
+
+.btn-secondary {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.btn-secondary:hover {
+  background: var(--border);
+}
+
+.btn-primary svg,
+.btn-secondary svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Empty State */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 4rem 2rem;
+  min-height: 400px;
+}
+
+.empty-state svg {
+  width: 80px;
+  height: 80px;
+  color: var(--text-secondary);
+  opacity: 0.5;
+  margin-bottom: 1.5rem;
+}
+
+.empty-state p {
+  font-size: 1.125rem;
+  color: var(--text-secondary);
+  margin-bottom: 2rem;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .header-content {
+    padding: 1rem;
   }
-  .notes-app {
-    min-height: 100vh;
-    background-color: #f0f4ff;
-    transition: all 0.3s ease;
+  
+  .header-title h1 {
+    font-size: 1.25rem;
   }
-  .notes-app.dark {
-    background-color: #111827;
+  
+  .btn-add-note span {
+    display: none;
   }
-  /* Header Styles */
-  .header {
-    background-color: rgba(255, 255, 255, 0.95);
-    border-bottom: 1px solid #e5e7eb;
-    padding: 16px;
-    position: sticky;
-    top: 0;
-    z-index: 40;
-    backdrop-filter: blur(12px);
+  
+  .filter-bar {
+    padding: 1rem;
   }
-  .dark .header {
-    background-color: rgba(31, 41, 55, 0.95);
-    border-bottom-color: #374151;
+  
+  .filters-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
   }
-  .header-container {
-    max-width: 1152px;
-    margin: 0 auto;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
+  
+  .sort-select {
+    margin-left: 0;
+    width: 100%;
   }
-  .header-logo {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+  
+  .sort-select select {
+    flex: 1;
   }
-  .logo-icon {
-    width: 40px;
-    height: 40px;
-    background: linear-gradient(to bottom right, #4f46e5, #7c3aed);
-    border-radius: 12px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-  }
-  .logo-text {
-    font-size: 24px;
-    font-weight: bold;
-    background: linear-gradient(to right, #4f46e5, #7c3aed);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-  }
-  .header-actions {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  /* Button Styles */
-  .btn {
-    border: none;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    font-weight: 600;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .btn-theme {
-    padding: 10px;
-    border-radius: 12px;
-    background-color: #f3f4f6;
-  }
-  .dark .btn-theme {
-    background-color: #374151;
-  }
-  .btn-theme:hover {
-    background-color: #e5e7eb;
-  }
-  .dark .btn-theme:hover {
-    background-color: #4b5563;
-  }
-  .btn-clear {
-    padding: 10px 16px;
-    border-radius: 12px;
-    background-color: transparent;
-    color: #ef4444;
-    border: 1px solid #ef4444;
-    font-size: 14px;
-  }
-  .dark .btn-clear {
-    color: #f87171;
-    border-color: #f87171;
-  }
-  .btn-clear:hover {
-    background-color: #fee2e2;
-  }
-  .dark .btn-clear:hover {
-    background-color: rgba(239, 68, 68, 0.1);
-  }
-  .btn-primary {
-    background: linear-gradient(to right, #4f46e5, #7c3aed);
-    color: white;
-    padding: 10px 20px;
-    border-radius: 12px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-  }
-  .btn-primary:hover {
-    background: linear-gradient(to right, #4338ca, #6d28d9);
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-  }
-  /* Main Content */
+  
   .main-content {
-    max-width: 1152px;
-    margin: 0 auto;
-    padding: 32px 16px;
+    padding: 1rem;
   }
-  /* Search and Filter Bar */
-  .search-filter-bar {
-    margin-bottom: 32px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-  .search-container {
-    position: relative;
-    flex: 1;
-  }
-  .search-icon {
-    position: absolute;
-    left: 16px;
-    top: 50%;
-    transform: translateY(-50%);
-    color: #9ca3af;
-  }
-  .search-input {
-    width: 100%;
-    padding: 12px 16px 12px 48px;
-    border-radius: 12px;
-    border: 1px solid #d1d5db;
-    background-color: white;
-    color: #111827;
-    outline: none;
-    transition: all 0.2s ease;
-    font-size: 16px;
-  }
-  .dark .search-input {
-    border-color: #374151;
-    background-color: #1f2937;
-    color: #f3f4f6;
-  }
-  .search-input:focus {
-    border-color: #4f46e5;
-    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
-  }
-  .filter-buttons {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-  .filter-btn {
-    padding: 12px 16px;
-    border-radius: 12px;
-    border: 1px solid #d1d5db;
-    background-color: white;
-    color: #374151;
-    cursor: pointer;
-    font-weight: 600;
-    transition: all 0.2s ease;
-  }
-  .dark .filter-btn {
-    border-color: #374151;
-    background-color: #1f2937;
-    color: #d1d5db;
-  }
-  .filter-btn.active {
-    background-color: #4f46e5;
-    color: white;
-    border-color: #4f46e5;
-  }
-  .filter-btn:hover:not(.active) {
-    border-color: #4f46e5;
-  }
-  /* Empty State */
-  .empty-state {
-    text-align: center;
-    padding: 80px 0;
-  }
-  .empty-icon {
-    width: 80px;
-    height: 80px;
-    background-color: #f3f4f6;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin: 0 auto 16px;
-  }
-  .dark .empty-icon {
-    background-color: #1f2937;
-  }
-  .empty-text {
-    color: #6b7280;
-    font-size: 18px;
-  }
-  .dark .empty-text {
-    color: #9ca3af;
-  }
-  /* Notes Grid */
+  
   .notes-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 20px;
+    grid-template-columns: 1fr;
   }
-  /* Note Card */
-  .note-card {
-    background-color: white;
-    border-radius: 16px;
-    padding: 24px;
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    border: 2px solid transparent;
-    transition: all 0.3s ease;
-    position: relative;
+  
+  .modal {
+    max-width: 100%;
+    margin: 0;
+    border-radius: 0;
   }
-  .dark .note-card {
-    background-color: #1f2937;
-  }
-  .note-card:hover {
-    box-shadow: 0 10px 15px rgba(0, 0, 0, 0.15);
-    border-color: #e0e7ff;
-  }
-  .dark .note-card:hover {
-    border-color: #3730a3;
-  }
-  .note-card.completed {
-    opacity: 0.75;
-    border-color: #86efac;
-  }
-  .dark .note-card.completed {
-    border-color: #166534;
-  }
-  .note-checkbox {
-    position: absolute;
-    top: 16px;
-    right: 16px;
-    width: 24px;
-    height: 24px;
-    border-radius: 8px;
-    border: 2px solid #d1d5db;
-    background-color: transparent;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s ease;
-  }
-  .dark .note-checkbox {
-    border-color: #4b5563;
-  }
-  .note-checkbox.checked {
-    background-color: #22c55e;
-    border-color: #22c55e;
-  }
-  .note-checkbox:hover {
-    border-color: #4f46e5;
-  }
-  .note-title {
-    font-size: 20px;
-    font-weight: bold;
-    margin-bottom: 12px;
-    padding-right: 32px;
-    color: #111827;
-  }
-  .dark .note-title {
-    color: #f3f4f6;
-  }
-  .note-title.completed {
-    text-decoration: line-through;
-    color: #9ca3af;
-  }
-  .note-description {
-    font-size: 14px;
-    margin-bottom: 16px;
-    color: #6b7280;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical;
-  }
-  .dark .note-description {
-    color: #9ca3af;
-  }
-  .note-description.completed {
-    color: #9ca3af;
-  }
-  .dark .note-description.completed {
-    color: #4b5563;
-  }
-  .note-actions {
-    display: flex;
-    gap: 8px;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
     opacity: 0;
-    transition: opacity 0.2s ease;
+    transform: translateY(10px);
   }
-  .note-card:hover .note-actions {
+  to {
     opacity: 1;
+    transform: translateY(0);
   }
-  .action-btn {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 8px 12px;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 500;
-    transition: all 0.2s ease;
-  }
-  .action-btn-edit {
-    background-color: #eef2ff;
-    color: #4f46e5;
-  }
-  .dark .action-btn-edit {
-    background-color: rgba(79, 70, 229, 0.2);
-    color: #818cf8;
-  }
-  .action-btn-edit:hover {
-    background-color: #e0e7ff;
-  }
-  .dark .action-btn-edit:hover {
-    background-color: rgba(79, 70, 229, 0.3);
-  }
-  .action-btn-delete {
-    background-color: #fee2e2;
-    color: #ef4444;
-  }
-  .dark .action-btn-delete {
-    background-color: rgba(239, 68, 68, 0.2);
-    color: #f87171;
-  }
-  .action-btn-delete:hover {
-    background-color: #fecaca;
-  }
-  .dark .action-btn-delete:hover {
-    background-color: rgba(239, 68, 68, 0.3);
-  }
-  /* Modal */
-  .modal-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 16px;
-    background-color: rgba(0, 0, 0, 0.5);
-    backdrop-filter: blur(4px);
-  }
-  .modal-content {
-    background-color: white;
-    border-radius: 16px;
-    width: 100%;
-    max-width: 512px;
-    padding: 24px;
-    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3);
-  }
-  .dark .modal-content {
-    background-color: #1f2937;
-  }
-  .modal-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 24px;
-  }
-  .modal-title {
-    font-size: 24px;
-    font-weight: bold;
-    color: #111827;
-  }
-  .dark .modal-title {
-    color: #f3f4f6;
-  }
-  .modal-close {
-    padding: 8px;
-    border-radius: 8px;
-    background-color: transparent;
-    border: none;
-    cursor: pointer;
-    transition: background-color 0.2s ease;
-  }
-  .modal-close:hover {
-    background-color: #f3f4f6;
-  }
-  .dark .modal-close:hover {
-    background-color: #374151;
-  }
-  .modal-form {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-  .form-group {
-    display: flex;
-    flex-direction: column;
-  }
-  .form-label {
-    display: block;
-    font-size: 14px;
-    font-weight: 500;
-    color: #374151;
-    margin-bottom: 8px;
-  }
-  .dark .form-label {
-    color: #d1d5db;
-  }
-  .form-input {
-    width: 100%;
-    padding: 12px 16px;
-    border-radius: 12px;
-    border: 1px solid #d1d5db;
-    background-color: white;
-    color: #111827;
-    outline: none;
-    transition: all 0.2s ease;
-    font-size: 16px;
-    font-family: inherit;
-  }
-  .dark .form-input {
-    border-color: #374151;
-    background-color: #111827;
-    color: #f3f4f6;
-  }
-  .form-input:focus {
-    border-color: #4f46e5;
-    box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
-  }
-  .form-textarea {
-    resize: none;
-  }
-  .modal-actions {
-    display: flex;
-    gap: 12px;
-    margin-top: 24px;
-  }
-  .btn-cancel {
-    flex: 1;
-    padding: 12px 16px;
-    background-color: #f3f4f6;
-    color: #374151;
-    border: none;
-    border-radius: 12px;
-    cursor: pointer;
-    font-weight: 600;
-    transition: all 0.2s ease;
-  }
-  .dark .btn-cancel {
-    background-color: #374151;
-    color: #d1d5db;
-  }
-  .btn-cancel:hover {
-    background-color: #e5e7eb;
-  }
-  .dark .btn-cancel:hover {
-    background-color: #4b5563;
-  }
-  .btn-save {
-    flex: 1;
-    padding: 12px 16px;
-    background: linear-gradient(to right, #4f46e5, #7c3aed);
-    color: white;
-    border: none;
-    border-radius: 12px;
-    cursor: pointer;
-    font-weight: 600;
-    transition: all 0.2s ease;
-  }
-  .btn-save:hover:not(:disabled) {
-    background: linear-gradient(to right, #4338ca, #6d28d9);
-    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
-  }
-  .btn-save:disabled {
-    background: #9ca3af;
-    cursor: not-allowed;
-    opacity: 0.5;
-  }
-  /* Responsive */
-  @media (max-width: 640px) {
-    .header-logo {
-      font-size: 18px;
-    }
-    .btn-primary span {
-      display: none;
-    }
-    .notes-grid {
-      grid-template-columns: 1fr;
-    }
-    .search-filter-bar {
-      flex-direction: column;
-    }
-  }
+}
+
+.note-card {
+  animation: fadeIn 0.3s ease-out;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
 `;
+
+// ============================================================================
+// SSR SETUP & EXPORT
+// ============================================================================
+
+// Inject styles into document
+if (isClient) {
+  const styleId = 'app-styles';
+  let styleElement = document.getElementById(styleId);
+  if (!styleElement) {
+    styleElement = document.createElement('style');
+    styleElement.id = styleId;
+    styleElement.textContent = APP_STYLES;
+    document.head.appendChild(styleElement);
+  }
+}
+
+export default App;
